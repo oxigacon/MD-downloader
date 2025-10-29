@@ -1,0 +1,39 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker (не включаем в образ)
+.dockerignore
+
+# Downloads (результаты работы программы)
+downloads/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# README (не нужен в образе)
+README.md
