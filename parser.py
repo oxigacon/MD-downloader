@@ -7,13 +7,20 @@ Web to Markdown Parser
 import os
 import re
 import hashlib
+import json
+import base64
 from urllib.parse import urljoin, urlparse, unquote
 from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from tqdm import tqdm
-import pdfkit
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+
 
 class WebToMarkdownParser:
     def __init__(self, base_dir="D:\\Downloads\\MD downloads"):
@@ -24,19 +31,41 @@ class WebToMarkdownParser:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         
-        # Проверяем наличие wkhtmltopdf
-        self.pdf_available = self.check_wkhtmltopdf()
+        # Инициализируем Selenium для PDF
+        self.driver = None
+        self.pdf_available = self.init_selenium()
         
-    def check_wkhtmltopdf(self):
-        """Проверяет наличие wkhtmltopdf"""
+    def init_selenium(self):
+        """Инициализирует Selenium WebDriver"""
         try:
-            # Пытаемся найти wkhtmltopdf
-            pdfkit.configuration()
+            print("🔧 Инициализация Chrome WebDriver...")
+            
+            chrome_options = Options()
+            chrome_options.add_argument('--headless')  # Без GUI
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--window-size=1920,1080')
+            
+            # Автоматическая установка ChromeDriver
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            print("✅ Chrome WebDriver готов")
             return True
-        except Exception:
-            print("⚠️  wkhtmltopdf не найден. PDF не будет создаваться.")
-            print("💡 Скачайте с: https://wkhtmltopdf.org/downloads.html")
+            
+        except Exception as e:
+            print(f"⚠️  Не удалось инициализировать Selenium: {e}")
+            print("💡 PDF не будет создаваться")
             return False
+    
+    def __del__(self):
+        """Закрываем драйвер при завершении"""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except:
+                pass
         
     def sanitize_filename(self, name):
         """Очищает имя файла от недопустимых символов"""
@@ -190,49 +219,54 @@ class WebToMarkdownParser:
         # Конвертируем в Markdown
         markdown_content = md(str(soup), heading_style="ATX")
         
-        return markdown_content, str(soup)
+        return markdown_content
     
-    def generate_pdf(self, html_content, url, pdf_path, site_dir):
-        """Генерирует PDF из HTML с помощью wkhtmltopdf"""
-        if not self.pdf_available:
+    def generate_pdf(self, url, pdf_path):
+        """Генерирует PDF через Chrome Print to PDF"""
+        if not self.pdf_available or not self.driver:
             return False
             
         try:
-            print("📄 Генерация PDF...")
+            print("📄 Генерация PDF через Chrome...")
             
-            # Сохраняем временный HTML файл
-            temp_html = site_dir / 'temp_for_pdf.html'
-            with open(temp_html, 'w', encoding='utf-8') as f:
-                f.write(html_content)
+            # Загружаем страницу
+            self.driver.get(url)
             
-            # Опции для wkhtmltopdf
-            options = {
-                'page-size': 'A4',
-                'margin-top': '20mm',
-                'margin-right': '20mm',
-                'margin-bottom': '20mm',
-                'margin-left': '20mm',
-                'encoding': 'UTF-8',
-                'enable-local-file-access': None,
-                'no-stop-slow-scripts': None,
-                'quiet': '',
-            }
+            # Ждем загрузки страницы
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
             
-            # Генерируем PDF
-            pdfkit.from_file(str(temp_html), str(pdf_path), options=options)
+            # Дополнительная пауза для загрузки изображений и стилей
+            import time
+            time.sleep(2)
             
-            # Удаляем временный файл
-            temp_html.unlink()
+            # Используем Chrome DevTools Protocol для печати в PDF
+            pdf_data = self.driver.execute_cdp_cmd("Page.printToPDF", {
+                "printBackground": True,
+                "landscape": False,
+                "paperWidth": 8.27,  # A4 width in inches
+                "paperHeight": 11.69,  # A4 height in inches
+                "marginTop": 0.4,
+                "marginBottom": 0.4,
+                "marginLeft": 0.4,
+                "marginRight": 0.4,
+                "displayHeaderFooter": False,
+                "preferCSSPageSize": False,
+                "generateDocumentOutline": False,
+                "generateTaggedPDF": False,
+                "transferMode": "ReturnAsBase64"
+            })
+            
+            # Сохраняем PDF
+            with open(pdf_path, 'wb') as f:
+                f.write(base64.b64decode(pdf_data['data']))
             
             print(f"✅ PDF сохранен: {pdf_path.name}")
             return True
             
         except Exception as e:
             print(f"⚠️  Ошибка создания PDF: {e}")
-            print("💡 Убедитесь, что wkhtmltopdf установлен правильно")
-            # Удаляем временный файл при ошибке
-            if temp_html.exists():
-                temp_html.unlink()
             return False
     
     def parse_website(self, url):
@@ -257,7 +291,7 @@ class WebToMarkdownParser:
             
             # Конвертируем HTML в Markdown
             print("🔄 Конвертация в Markdown...")
-            markdown_content, processed_html = self.process_html_to_markdown(
+            markdown_content = self.process_html_to_markdown(
                 response.text, 
                 url, 
                 assets_dir
@@ -276,9 +310,9 @@ class WebToMarkdownParser:
             with open(html_file, 'w', encoding='utf-8') as f:
                 f.write(response.text)
             
-            # Генерируем PDF (если доступно)
+            # Генерируем PDF через Chrome (если доступно)
             pdf_file = site_dir / 'page.pdf'
-            pdf_created = self.generate_pdf(processed_html, url, pdf_file, site_dir)
+            pdf_created = self.generate_pdf(url, pdf_file)
             
             print(f"\n✅ Готово! Сохранено в: {site_dir}")
             print(f"   📄 Markdown: content.md")
@@ -295,33 +329,38 @@ class WebToMarkdownParser:
 
 def main():
     print("=" * 60)
-    print("  🔗 Web to Markdown Parser (with PDF)")
+    print("  🔗 Web to Markdown Parser (with Chrome PDF)")
     print("=" * 60)
     
     parser = WebToMarkdownParser()
     
     if not parser.pdf_available:
         print("\n" + "=" * 60)
-        print("  ⚠️  ВНИМАНИЕ: wkhtmltopdf не установлен!")
+        print("  ⚠️  ВНИМАНИЕ: Selenium не инициализирован!")
         print("  📝 PDF файлы создаваться не будут")
-        print("  💡 Скачайте с: https://wkhtmltopdf.org/downloads.html")
+        print("  💡 Установите: pip install selenium webdriver-manager")
         print("=" * 60 + "\n")
     
-    while True:
-        url = input("\n🔗 Введите URL для парсинга (или 'exit' для выхода): ").strip()
-        
-        if url.lower() in ['exit', 'quit', 'q']:
-            print("👋 До свидания!")
-            break
-        
-        if not url:
-            print("⚠️  URL не может быть пустым")
-            continue
-        
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-        
-        parser.parse_website(url)
+    try:
+        while True:
+            url = input("\n🔗 Введите URL для парсинга (или 'exit' для выхода): ").strip()
+            
+            if url.lower() in ['exit', 'quit', 'q']:
+                print("👋 До свидания!")
+                break
+            
+            if not url:
+                print("⚠️  URL не может быть пустым")
+                continue
+            
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            
+            parser.parse_website(url)
+    finally:
+        # Закрываем драйвер при выходе
+        if parser.driver:
+            parser.driver.quit()
 
 
 if __name__ == "__main__":
