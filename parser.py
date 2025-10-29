@@ -278,7 +278,7 @@ class WebToMarkdownParser:
             
             # Генерируем PDF (если доступно)
             pdf_file = site_dir / 'page.pdf'
-            pdf_created = self.generate_pdf(processed_html, url, pdf_path, site_dir)
+            pdf_created = self.generate_pdf(processed_html, url, pdf_file, site_dir)
             
             print(f"\n✅ Готово! Сохранено в: {site_dir}")
             print(f"   📄 Markdown: content.md")
